@@ -1,15 +1,15 @@
 (function () {
   'use strict';
 
-  var DEFAULT_RESET = ':root{color-scheme:light;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0;font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}';
+  var COLLS = ['equipo', 'niveles', 'calendario', 'contactos', 'comunicados', 'proyectos'];
   var CATEGORIAS = ['Aviso', 'Reunión', 'Salida educativa', 'Actividad', 'Administración', 'Urgente'];
   var TIPOS = ['Clases', 'Sin clases', 'Reunión', 'Acto', 'Salida', 'Evaluación', 'Feriado', 'Otro'];
-  var TABS = [['inicio', 'Inicio'], ['nosotros', 'Nosotros'], ['niveles', 'Propuesta'], ['calendario', 'Calendario'], ['comunicados', 'Comunicados'], ['proyectos', 'Proyectos'], ['inscripcion', 'Inscripción'], ['contacto', 'Contacto']];
+  var TABS = [['inicio', 'Inicio'], ['nosotros', 'Nosotros'], ['niveles', 'Propuesta'], ['calendario', 'Calendario'], ['comunicados', 'Comunicados'], ['proyectos', 'Proyectos'], ['libreta', 'Libreta virtual'], ['inscripcion', 'Inscripción'], ['contacto', 'Contacto']];
 
   /* Formularios simples: cada fila es un campo o una pareja de campos. */
   var COLS = {
     contactos: { nuevo: 'Agregar contacto', editar: 'Editar contacto', schema: [
-      { k: 'area', label: 'Área o persona', req: 1, max: 80, hint: 'Por ejemplo: Secretaría, Dirección, Preceptoría.' },
+      { k: 'area', label: 'Área o persona', req: 1, max: 80, hint: 'Por ejemplo: Secretaría, Dirección, Vicedirección.' },
       { k: 'detalle', label: 'Para qué consultar', max: 160 },
       [{ k: 'telefono', label: 'Teléfono', max: 60 }, { k: 'email', label: 'Correo', max: 100 }],
       { k: 'horario', label: 'Horario de atención', max: 100 }] },
@@ -33,6 +33,11 @@
     nosotros: { titulo: 'Editar Nosotros', schema: [
       { k: 'historia', label: 'Quiénes somos', type: 'textarea', rows: 7, req: 1, hint: 'Historia y presentación de la escuela.' },
       { k: 'mision', label: 'Misión y valores', type: 'textarea', rows: 7, req: 1 }] },
+    libreta: { titulo: 'Editar Libreta virtual', schema: [
+      { k: 'texto', label: 'Presentación', type: 'textarea', rows: 4, hint: 'Qué es la libreta virtual y para qué sirve.' },
+      { k: 'pasos', label: 'Pasos para acceder (uno por línea)', type: 'textarea', rows: 8, req: 1 },
+      [{ k: 'enlace', label: 'Enlace para ingresar (opcional)', max: 300, ph: 'https://' }, { k: 'boton', label: 'Texto del botón', max: 40, ph: 'Ingresar a la libreta' }],
+      { k: 'ayuda', label: 'Si no podés ingresar', type: 'textarea', rows: 3, max: 400, hint: 'A quién consultar o qué hacer si hay problemas.' }] },
     inscripcion: { titulo: 'Editar Inscripción', schema: [
       { k: 'texto', label: 'Cómo anotarse', type: 'textarea', rows: 6, req: 1 },
       { k: 'requisitos', label: 'Documentación a presentar (una por línea)', type: 'textarea', rows: 6 },
@@ -40,7 +45,10 @@
       { k: 'enlace', label: 'Enlace a formulario (opcional)', max: 300, ph: 'https://' }] }
   };
 
-  var live = norm(JSON.parse(document.getElementById('state').textContent));
+  /* Contenido inicial: lo escrito en index.html. Se usa hasta que un docente lo guarda en la base de datos. */
+  var seed = norm(JSON.parse(document.getElementById('state').textContent));
+  var live = clone(seed);
+  var sb = null, sbProblem = '', user = null, remote = null, remoteOk = false, seedNeeded = false, loading = false, recovery = false;
   var draft = null, editing = false, dirty = false, canEdit = false, saving = false;
   var tab = 'inicio', filterCom = 'Todos', filterPro = 'Todos', showOld = false, showPast = false;
   var pendingDel = null, modal = null, lastFocus = null, formFotos = [], msg = '', discardArm = false;
@@ -96,10 +104,14 @@
   }
   function norm(s) {
     s.escuela = s.escuela || {};
+    if (s.escuela.frase && !s.escuela.lema) s.escuela.lema = s.escuela.frase;
+    delete s.escuela.frase;
     ['nombre', 'lema', 'direccion', 'telefono', 'email', 'horario'].forEach(function (k) { s.escuela[k] = s.escuela[k] || ''; });
     if (!Array.isArray(s.escuela.grupos) || !s.escuela.grupos.length) s.escuela.grupos = ['Toda la escuela'];
     s.inicio = s.inicio || { titulo: '', texto: '' };
     s.nosotros = s.nosotros || { historia: '', mision: '' };
+    s.escuela.portada = s.escuela.portada || '';
+    s.libreta = s.libreta || { texto: '', pasos: '', enlace: '', boton: '', ayuda: '' };
     s.inscripcion = s.inscripcion || { texto: '', requisitos: '', fechas: '', enlace: '' };
     ['equipo', 'niveles', 'calendario', 'contactos', 'comunicados', 'proyectos'].forEach(function (k) { s[k] = s[k] || []; });
     return s;
@@ -108,32 +120,162 @@
   function niveles(d) { var g = d.escuela.grupos; return g.length > 1 ? g.slice(1) : g; }
   function markDirty() { dirty = true; discardArm = false; msg = ''; }
   function hasEj(d) {
-    return d.inicio.ejemplo || d.nosotros.ejemplo || d.inscripcion.ejemplo ||
+    return d.inicio.ejemplo || d.nosotros.ejemplo || d.libreta.ejemplo || d.inscripcion.ejemplo ||
       ['equipo', 'niveles', 'calendario', 'contactos', 'comunicados', 'proyectos'].some(function (k) { return d[k].some(function (x) { return x.ejemplo; }); });
   }
   function goTab(id) { tab = id; pendingDel = null; render(); try { window.scrollTo(0, 0); } catch (e) {} }
 
-  /* ---------- armado de la página publicada ---------- */
-  function getReset() {
-    try {
-      var ss = document.head.querySelectorAll('style');
-      for (var i = 0; i < ss.length; i++) {
-        var t = ss[i].textContent;
-        if (ss[i].id !== 'page-style' && /\[hidden\]/.test(t) && /color-scheme/.test(t)) return t;
-      }
-    } catch (e) {}
-    return DEFAULT_RESET;
+  /* ---------- base de datos y acceso de docentes (Supabase) ---------- */
+  /* Qué se guarda y dónde: ver LEEME-docentes.md. Quién puede escribir lo deciden las políticas de supabase-setup.sql, no esta página. */
+  function canon(v) {
+    if (Array.isArray(v)) return '[' + v.map(canon).join(',') + ']';
+    if (v && typeof v === 'object') return '{' + Object.keys(v).sort().map(function (k) { return JSON.stringify(k) + ':' + canon(v[k]); }).join(',') + '}';
+    return JSON.stringify(v);
   }
-  function buildDoc(state) {
-    var css = document.getElementById('page-style').textContent;
-    var js = document.getElementById('app-src').textContent;
-    var json = JSON.stringify(state).replace(/</g, '\\u003c').split(String.fromCharCode(8232)).join('\\u2028').split(String.fromCharCode(8233)).join('\\u2029');
-    return '<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>' + getReset() + '</style></head><body>'
-      + '<title>Portal de Familias</title><meta name="claude:viewport-fit-sides" content="cover">'
-      + '<style id="page-style">' + css + '</style>'
-      + '<div id="root"></div>\n<div id="overlay"></div>\n'
-      + '<script type="application/json" id="state">' + json + '</scr' + 'ipt>\n'
-      + '<script id="app-src">' + js + '</scr' + 'ipt></body></html>';
+  function sbConfigured() {
+    var c = window.SUPABASE_CONFIG;
+    return !!(window.supabase && window.supabase.createClient && c && c.url && c.anonKey && !/PEGAR/i.test(c.url + c.anonKey));
+  }
+  function initSupabase() {
+    if (!window.supabase || !window.supabase.createClient) { sbProblem = 'No se pudo cargar la librería de Supabase (revisá la conexión o el bloqueo de scripts).'; console.warn(sbProblem); return; }
+    if (!sbConfigured()) { sbProblem = 'Falta completar supabase-config.js (o el archivo no se subió junto a index.html).'; console.warn(sbProblem); return; }
+    try {
+      sb = window.supabase.createClient(window.SUPABASE_CONFIG.url, window.SUPABASE_CONFIG.anonKey);
+    } catch (e) { console.warn('Supabase no se pudo iniciar', e); sb = null; return; }
+    loading = true; render();
+    var timer = setTimeout(function () { if (loading) { loading = false; render(); } }, 8000);
+    loadRemote().catch(function (e) { remoteOk = false; sbProblem = 'No se pudo leer la base de datos: ' + ((e && e.message) || e) + '. Si el proyecto de Supabase está pausado, reactivalo desde el panel.'; console.warn(sbProblem, e); }).then(function () {
+      clearTimeout(timer); loading = false; render();
+    });
+    sb.auth.onAuthStateChange(function (event, session) {
+      if (event === 'PASSWORD_RECOVERY') recovery = true;
+      /* Supabase pide no llamar a otras funciones suyas dentro de este aviso: se difiere. */
+      setTimeout(function () { onAuth(session && session.user ? session.user : null); }, 0);
+    });
+  }
+  function loadRemote() {
+    return Promise.resolve(sb.from('contenido').select('coleccion,id,orden,data')).then(function (res) {
+      if (res.error) throw res.error;
+      var cfg = null, cols = {}, rem = { config: null, cols: {} };
+      COLLS.forEach(function (n) { cols[n] = []; rem.cols[n] = {}; });
+      (res.data || []).forEach(function (r) {
+        if (r.coleccion === 'config') { if (r.id === 'sitio') { cfg = r.data; rem.config = canon(r.data); } return; }
+        if (!cols[r.coleccion]) return;
+        rem.cols[r.coleccion][r.id] = canon({ orden: r.orden, data: r.data });
+        cols[r.coleccion].push({ orden: r.orden, item: Object.assign({}, r.data, { id: r.id }) });
+      });
+      COLLS.forEach(function (n) {
+        cols[n].sort(function (a, b) { return a.orden - b.orden; });
+        cols[n] = cols[n].map(function (x) { return x.item; });
+      });
+      remote = rem; remoteOk = true;
+      if (cfg) {
+        live = norm({
+          escuela: cfg.escuela, inicio: cfg.inicio, nosotros: cfg.nosotros, libreta: cfg.libreta, inscripcion: cfg.inscripcion,
+          equipo: cols.equipo, niveles: cols.niveles, calendario: cols.calendario,
+          contactos: cols.contactos, comunicados: cols.comunicados, proyectos: cols.proyectos
+        });
+        seedNeeded = false;
+      } else {
+        live = clone(seed); seedNeeded = true;
+      }
+    });
+  }
+
+  function checkDocente(u) {
+    return Promise.resolve(sb.from('docentes').select('user_id').eq('user_id', u.id).maybeSingle()).then(function (r) {
+      if (r.error) throw r.error;
+      return !!r.data;
+    });
+  }
+  function onAuth(u) {
+    if (!u) {
+      var was = !!user;
+      user = null; canEdit = false; recovery = false;
+      if (was) { editing = false; draft = null; dirty = false; msg = ''; }
+      render(); return;
+    }
+    if (user && user.id === u.id) { user = u; afterAuth(); return; }
+    checkDocente(u).then(function (ok) {
+      if (ok) { user = u; canEdit = true; render(); afterAuth(); }
+      else { user = null; canEdit = false; recovery = false; sb.auth.signOut(); }
+    }).catch(function () { user = null; canEdit = false; });
+  }
+  /* Si la persona llegó desde el enlace de "Olvidé mi contraseña", se le pide la nueva. */
+  function afterAuth() { if (recovery) { recovery = false; openModal({ type: 'newpass' }); } }
+  function logout() { if (sb) sb.auth.signOut(); }
+  function authError(e) {
+    var m = ((e && e.message) || '').toLowerCase();
+    if (m.indexOf('email not confirmed') >= 0) return 'Falta confirmar el correo de esta cuenta. Consultá con la dirección.';
+    if (m.indexOf('rate limit') >= 0 || m.indexOf('too many') >= 0 || (e && e.status === 429)) return 'Demasiados intentos. Esperá unos minutos y probá de nuevo.';
+    if (m.indexOf('fetch') >= 0 || m.indexOf('network') >= 0) return 'No hay conexión. Revisá internet y probá de nuevo.';
+    if (m.indexOf('banned') >= 0 || m.indexOf('disabled') >= 0) return 'Esta cuenta está deshabilitada. Consultá con la dirección.';
+    return 'Correo o contraseña incorrectos.';
+  }
+  function hideErr() { var b = document.getElementById('f-err'); if (b) b.hidden = true; }
+
+  function formLogin() {
+    var form = el('form', { novalidate: true },
+      el('p', { class: 'hint', text: 'Este acceso es solo para docentes de la escuela. Las familias no necesitan iniciar sesión para ver la página.' }),
+      errBox(),
+      field('l-mail', 'Correo', el('input', { class: 'in', id: 'l-mail', type: 'email', autocomplete: 'username', inputmode: 'email' })),
+      field('l-pass', 'Contraseña', el('input', { class: 'in', id: 'l-pass', type: 'password', autocomplete: 'current-password' })),
+      el('p', { class: 'hint', id: 'l-info', hidden: true }),
+      el('div', { class: 'dlg-foot' },
+        el('button', { class: 'btn primary', type: 'submit', text: 'Ingresar' })));
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault(); hideErr();
+      var mail = val('l-mail'), pass = document.getElementById('l-pass').value;
+      if (!mail || !pass) { showErr('Escribí tu correo y tu contraseña.'); return; }
+      var btn = form.querySelector('button[type=submit]');
+      btn.disabled = true;
+      Promise.resolve(sb.auth.signInWithPassword({ email: mail, password: pass })).then(function (r) {
+        if (r.error) throw r.error;
+        var u = r.data.user;
+        return checkDocente(u).then(function (ok) {
+          if (!ok) {
+            return Promise.resolve(sb.auth.signOut()).then(function () { showErr('Esta cuenta no está habilitada como docente. Pedile acceso a la dirección.'); });
+          }
+          user = u; canEdit = true; closeModal(); render();
+        });
+      }).catch(function (e) { showErr(authError(e)); }).then(function () { btn.disabled = false; });
+    });
+    return form;
+  }
+  function resetPass() {
+    var mail = val('l-mail');
+    if (!mail) { showErr('Escribí tu correo y volvé a tocar "Olvidé mi contraseña".'); return; }
+    Promise.resolve(sb.auth.resetPasswordForEmail(mail, { redirectTo: location.origin + location.pathname })).then(function (r) {
+      if (r.error) throw r.error;
+      hideErr();
+      var i = document.getElementById('l-info');
+      i.textContent = 'Si el correo corresponde a una cuenta de docente, te llegó un mensaje para cambiar la contraseña. Revisá también la carpeta de spam.';
+      i.hidden = false;
+    }).catch(function () { showErr('No se pudo enviar el mensaje. Revisá el correo e intentá de nuevo.'); });
+  }
+  function formNewPass() {
+    var form = el('form', { novalidate: true },
+      errBox(),
+      field('n-pass', 'Nueva contraseña', el('input', { class: 'in', id: 'n-pass', type: 'password', autocomplete: 'new-password' }), 'Mínimo 8 caracteres.'),
+      field('n-pass2', 'Repetir contraseña', el('input', { class: 'in', id: 'n-pass2', type: 'password', autocomplete: 'new-password' })),
+      el('p', { class: 'hint', id: 'n-info', hidden: true }),
+      el('div', { class: 'dlg-foot' }, el('button', { class: 'btn primary', type: 'submit', text: 'Guardar contraseña' })));
+    form.addEventListener('submit', function (ev) {
+      ev.preventDefault(); hideErr();
+      var a = document.getElementById('n-pass').value, b = document.getElementById('n-pass2').value;
+      if (a.length < 8) { showErr('La contraseña tiene que tener al menos 8 caracteres.'); return; }
+      if (a !== b) { showErr('Las dos contraseñas no coinciden.'); return; }
+      Promise.resolve(sb.auth.updateUser({ password: a })).then(function (r) {
+        if (r.error) throw r.error;
+        var i = document.getElementById('n-info');
+        i.textContent = 'Listo, tu contraseña se actualizó.'; i.hidden = false;
+        setTimeout(closeModal, 1500);
+      }).catch(function (e) {
+        var m = ((e && e.message) || '').toLowerCase();
+        showErr(m.indexOf('different') >= 0 ? 'La contraseña nueva tiene que ser distinta de la anterior.' : 'No se pudo cambiar la contraseña. Probá con otra.');
+      });
+    });
+    return form;
   }
 
   /* ---------- estructura general ---------- */
@@ -141,6 +283,11 @@
     var d = data();
     var root = $('#root');
     root.replaceChildren();
+    if (loading) {
+      root.className = '';
+      root.append(el('div', { class: 'wrap loading' }, el('p', { class: 'hint', text: 'Cargando…' })));
+      return;
+    }
     root.className = editing ? 'is-editing' : '';
     root.append(hero(d), main(d));
     var f = footer(d); if (f) root.append(f);
@@ -149,12 +296,18 @@
 
   function hero(d) {
     var e = d.escuela;
-    return el('header', { class: 'hero' }, el('div', { class: 'wrap' },
+    var pu = e.portada && (/^data:image\//.test(e.portada) || safeUrl(e.portada)) ? e.portada : '';
+    return el('header', { class: 'hero' + (pu ? ' has-img' : ''), style: pu ? 'background-image:linear-gradient(rgba(14,24,48,.55),rgba(14,24,48,.72)),url("' + pu.replace(/["\\\n]/g, '') + '")' : null }, el('div', { class: 'wrap' },
       el('div', { class: 'hero-top' },
         el('p', { class: 'eyebrow', text: 'Sitio de la escuela' }),
+        sbProblem && /[?&]diagnostico/.test(location.search) ? el('p', { class: 'who', style: 'color:#b3261e', text: sbProblem }) : null,
         el('div', { class: 'grp' },
           editing ? el('button', { class: 'btn sm', type: 'button', onclick: function () { openModal({ type: 'esc' }); }, text: 'Datos de la escuela' }) : null,
-          canEdit && !editing ? el('button', { class: 'btn sm', type: 'button', onclick: startEdit, text: 'Editar contenido' }) : null)),
+          !editing && sb && !user ? el('button', { class: 'btn sm', type: 'button', onclick: function () { openModal({ type: 'login' }); }, text: 'Ingreso docentes' }) : null,
+          !editing && user && canEdit ? [
+            el('span', { class: 'who', text: user.email || 'Docente' }),
+            el('button', { class: 'btn sm primary', type: 'button', onclick: startEdit, text: 'Editar contenido' }),
+            el('button', { class: 'btn sm', type: 'button', onclick: logout, text: 'Cerrar sesión' })] : null)),
       el('h1', null, el('span', { text: e.nombre || 'Nombre de la escuela' })),
       e.lema ? el('p', { class: 'lema', text: e.lema }) : null,
       el('div', { class: 'tabs', role: 'tablist', 'aria-label': 'Secciones' }, TABS.map(function (t) {
@@ -167,7 +320,7 @@
   }
 
   function main(d) {
-    var views = { inicio: viewInicio, nosotros: viewNosotros, niveles: viewNiveles, calendario: viewCal, comunicados: viewCom, proyectos: viewPro, inscripcion: viewIns, contacto: viewContacto };
+    var views = { inicio: viewInicio, nosotros: viewNosotros, niveles: viewNiveles, calendario: viewCal, comunicados: viewCom, proyectos: viewPro, libreta: viewLibreta, inscripcion: viewIns, contacto: viewContacto };
     return el('main', { class: 'wrap', role: 'tabpanel' },
       editing && hasEj(d) ? el('div', { class: 'hintbox' },
         el('strong', { text: 'Lo marcado como "Ejemplo" ' }),
@@ -183,7 +336,10 @@
     return el('div', { class: 'sh' }, el('h2', null, title, flagged ? ejTag() : null), controls ? el('div', { class: 'grp' }, controls) : null);
   }
   function editSingle(key) { return editBtn('Editar texto', function () { openModal({ type: 'single', key: key }); }); }
-  function newCol(col, label) { return editBtn(label, function () { openModal({ type: 'col', col: col, id: null }); }, true); }
+  function newCol(col, label) {
+    var type = col === 'comunicados' ? 'com' : (col === 'proyectos' ? 'pro' : 'col');
+    return editBtn(label, function () { openModal({ type: type, col: col, id: null }); }, true);
+  }
   function emptyBox(text, hintText) {
     return el('div', { class: 'empty' }, el('p', { text: text }), editing && hintText ? el('p', { text: hintText }) : null);
   }
@@ -380,6 +536,24 @@
       itemActions('proyectos', p));
   }
 
+  /* ---------- Libreta virtual ---------- */
+  function viewLibreta(d) {
+    var s = d.libreta;
+    var pasos = (s.pasos || '').split('\n').map(function (x) { return x.trim(); }).filter(Boolean);
+    var u = safeUrl(s.enlace);
+    if (!s.texto && !pasos.length && !u && !s.ayuda && !editing) return el('section', null, el('div', { class: 'sec' }, secHead('Libreta virtual', false, null),
+      emptyBox('Pronto vas a encontrar acá cómo acceder a la libreta virtual.', '')));
+    return el('section', null,
+      el('div', { class: 'sec' }, secHead('Libreta virtual', s.ejemplo, editSingle('libreta')), s.texto ? el('p', { class: 'lead', text: s.texto }) : null),
+      el('div', { class: 'two' },
+        el('div', { class: 'box' }, el('h3', { text: 'Cómo acceder' }),
+          pasos.length ? el('ol', { class: 'req steps' }, pasos.map(function (r) { return el('li', { text: r }); })) : el('p', { class: 'hint', text: 'Todavía no se cargaron los pasos.' })),
+        (u || s.ayuda) ? el('div', { class: 'box' }, el('h3', { text: 'Ingreso y ayuda' }),
+          s.ayuda ? el('p', { text: s.ayuda }) : null,
+          u ? el('div', { class: 'acts' }, el('a', { class: 'btn primary', href: u, target: '_blank', rel: 'noopener noreferrer', text: s.boton || 'Ingresar a la libreta' })) : null,
+          s.ayuda ? seeAll('contacto', 'Ir a Contacto') : null) : null));
+  }
+
   /* ---------- Inscripción ---------- */
   function viewIns(d) {
     var s = d.inscripcion;
@@ -447,7 +621,12 @@
   }
 
   /* ---------- edición ---------- */
-  function startEdit() { draft = clone(live); editing = true; dirty = false; msg = ''; discardArm = false; render(); }
+  function startEdit() {
+    draft = clone(live); editing = true; discardArm = false;
+    dirty = seedNeeded;
+    msg = seedNeeded ? 'Primera vez: al guardar se sube todo el contenido actual a la base de datos.' : '';
+    render();
+  }
   function discard() {
     if (dirty && !discardArm) { discardArm = true; render(); return; }
     editing = false; draft = null; dirty = false; discardArm = false; msg = ''; pendingDel = null; render();
@@ -457,42 +636,92 @@
     pendingDel = null; markDirty(); render();
   }
   function savebar() {
-    var mb = new Blob([JSON.stringify(draft)]).size / 1048576;
-    var status = saving ? 'Publicando…' : (msg || (dirty ? 'Tenés cambios sin publicar.' : 'Modo edición. Todavía no hay cambios.'));
+    var status = saving ? 'Guardando…' : (msg || (dirty ? 'Tenés cambios sin guardar.' : 'Modo edición. Todavía no hay cambios.'));
     return el('div', { class: 'savebar', role: 'region', 'aria-label': 'Edición' },
-      el('div', { class: 'sb-msg', 'aria-live': 'polite' },
-        el('span', { text: status }),
-        el('span', { class: 'sb-size' + (mb > 11 ? ' warn' : ''), text: 'Tamaño de la página: ' + mb.toFixed(1) + ' MB de 16 MB' })),
+      el('div', { class: 'sb-msg', 'aria-live': 'polite' }, el('span', { text: status })),
       el('div', { class: 'sb-btns' },
         el('button', { class: 'btn', type: 'button', disabled: saving, onclick: discard, text: discardArm ? 'Sí, descartar' : (dirty ? 'Descartar cambios' : 'Salir de edición') }),
         el('button', { class: 'btn go', type: 'button', disabled: saving || !dirty, onclick: save, text: 'Guardar y publicar' })));
   }
+  /* Las fotos nuevas se suben al almacenamiento de Supabase y en la base queda solo su dirección. */
+  function uploadPhotos() {
+    var jobs = [];
+    var por = draft.escuela.portada;
+    if (por && /^data:/.test(por)) {
+      jobs.push(fetch(por).then(function (r) { return r.blob(); }).then(function (blob) {
+        var path = 'portada/' + uid() + uid() + '.jpg';
+        return sb.storage.from('fotos').upload(path, blob, { contentType: 'image/jpeg', cacheControl: '31536000' }).then(function (r) {
+          if (r.error) throw r.error;
+          draft.escuela.portada = sb.storage.from('fotos').getPublicUrl(path).data.publicUrl;
+        });
+      }));
+    }
+    draft.proyectos.forEach(function (p) {
+      (p.fotos || []).forEach(function (f, i) {
+        if (!/^data:/.test(f)) return;
+        jobs.push(fetch(f).then(function (r) { return r.blob(); }).then(function (blob) {
+          var path = 'proyectos/' + uid() + uid() + '.jpg';
+          return sb.storage.from('fotos').upload(path, blob, { contentType: 'image/jpeg', cacheControl: '31536000' }).then(function (r) {
+            if (r.error) throw r.error;
+            p.fotos[i] = sb.storage.from('fotos').getPublicUrl(path).data.publicUrl;
+          });
+        }));
+      });
+    });
+    return Promise.all(jobs);
+  }
+  /* Compara lo editado con lo que hay en la base y escribe solo lo que cambió. */
   function save() {
     if (saving || !dirty) return;
-    var api = window.claude && window.claude.use;
-    if (!api) { msg = 'Guardar solo funciona desde claude.ai.'; render(); return; }
+    if (!sb || !user) { msg = 'Tu sesión terminó. Volvé a iniciar sesión para guardar.'; render(); return; }
     saving = true; msg = ''; render();
-    window.claude.use('artifact').then(function (art) {
-      if (!art) { var e0 = new Error('x'); e0.code = 'not_granted'; throw e0; }
-      return art.publish(buildDoc(draft));
-    }).then(function () {
-      live = clone(draft); editing = false; draft = null; dirty = false; saving = false; msg = ''; render();
+    uploadPhotos().then(function () {
+      var rows = [], dels = [], next = { config: null, cols: {} };
+      var cfg = { escuela: draft.escuela, inicio: draft.inicio, nosotros: draft.nosotros, libreta: draft.libreta, inscripcion: draft.inscripcion };
+      next.config = canon(cfg);
+      if (!remote || remote.config !== next.config) rows.push({ coleccion: 'config', id: 'sitio', orden: 0, data: cfg });
+      COLLS.forEach(function (name) {
+        var prev = (remote && remote.cols[name]) || {}, ids = {};
+        next.cols[name] = {};
+        draft[name].forEach(function (item, i) {
+          var data = clone(item); delete data.id;
+          var cs = canon({ orden: i, data: data });
+          ids[item.id] = true; next.cols[name][item.id] = cs;
+          if (prev[item.id] !== cs) rows.push({ coleccion: name, id: item.id, orden: i, data: data });
+        });
+        var gone = Object.keys(prev).filter(function (id) { return !ids[id]; });
+        if (gone.length) dels.push({ coleccion: name, ids: gone });
+      });
+      var chain = Promise.resolve();
+      for (var k = 0; k < rows.length; k += 50) {
+        (function (chunk) {
+          chain = chain.then(function () {
+            return Promise.resolve(sb.from('contenido').upsert(chunk, { onConflict: 'coleccion,id' })).then(function (r) { if (r.error) throw r.error; });
+          });
+        })(rows.slice(k, k + 50));
+      }
+      dels.forEach(function (d) {
+        chain = chain.then(function () {
+          return Promise.resolve(sb.from('contenido').delete().eq('coleccion', d.coleccion).in('id', d.ids).select('id')).then(function (r) {
+            if (r.error) throw r.error;
+            /* Sin permiso, Supabase no da error: simplemente no borra nada. */
+            if ((r.data || []).length < d.ids.length) { var e = new Error('sin permiso'); e.code = '42501'; throw e; }
+          });
+        });
+      });
+      return chain.then(function () { return next; });
+    }).then(function (next) {
+      remote = next; seedNeeded = false; live = clone(draft);
+      editing = false; draft = null; dirty = false; saving = false; msg = ''; render();
     }).catch(function (e) {
       saving = false;
-      var c = e && e.code;
-      if (c === 'conflict') {
-        try { sessionStorage.setItem('pf-draft', JSON.stringify(draft)); } catch (x) {}
-        msg = 'Otra persona publicó antes. La página se recarga y recuperás tus cambios.';
-      } else if (c === 'not_writer' || c === 'not_granted' || c === 'capability_disabled' || c === 'consent_required') {
-        msg = 'Tu usuario puede ver la página pero no publicar cambios. Pedí acceso de editor.';
-      } else if (c === 'too_large') {
-        msg = 'La página supera el tamaño permitido. Quitá algunas fotos y probá de nuevo.';
-      } else if (c === 'rate_limited') {
-        msg = 'Publicaste muy seguido. Esperá un momento y probá de nuevo.';
-      } else {
-        msg = 'No se pudo publicar. Probá de nuevo en unos segundos.';
-      }
+      var m = ((e && e.message) || '').toLowerCase();
+      if ((e && (e.code === '42501' || e.status === 401 || e.status === 403)) || m.indexOf('row-level security') >= 0 || m.indexOf('jwt') >= 0 || m.indexOf('unauthorized') >= 0) msg = 'Tu cuenta no tiene permiso para guardar. Consultá con la dirección.';
+      else if (m.indexOf('fetch') >= 0 || m.indexOf('network') >= 0) msg = 'No hay conexión con la base de datos. Probá de nuevo.';
+      else msg = 'No se pudo guardar. Probá de nuevo en unos segundos.';
       render();
+      /* Si una parte se guardó y otra no, se vuelve a leer la base para que el siguiente intento no repita nada. */
+      loadRemote().catch(function () {});
     });
   }
 
@@ -502,7 +731,37 @@
     modal = null; formFotos = []; renderOverlay();
     if (lastFocus && document.contains(lastFocus)) { try { lastFocus.focus(); } catch (e) {} }
   }
-  document.addEventListener('keydown', function (ev) { if (ev.key === 'Escape' && modal) closeModal(); });
+  /* Ampliar fotos: pantalla completa, con flechas si hay varias. */
+  var lb = null;
+  function openLightbox(list, idx) {
+    closeLightbox();
+    var i = idx;
+    var img = el('img', { class: 'lb-img', alt: '' });
+    function show() { img.src = list[i]; img.alt = 'Foto ' + (i + 1) + ' de ' + list.length; cnt.textContent = list.length > 1 ? (i + 1) + ' / ' + list.length : ''; }
+    function go(n) { i = (i + n + list.length) % list.length; show(); }
+    var cnt = el('span', { class: 'lb-cnt' });
+    var box = el('div', { class: 'lb', role: 'dialog', 'aria-modal': 'true', 'aria-label': 'Foto ampliada', onclick: function (ev) { if (ev.target === box || ev.target === wrap) closeLightbox(); } });
+    var wrap = el('div', { class: 'lb-wrap' }, img);
+    box.append(wrap, cnt,
+      el('button', { class: 'lb-btn lb-x', type: 'button', 'aria-label': 'Cerrar', onclick: closeLightbox, text: '✕' }));
+    if (list.length > 1) box.append(
+      el('button', { class: 'lb-btn lb-prev', type: 'button', 'aria-label': 'Foto anterior', onclick: function () { go(-1); }, text: '‹' }),
+      el('button', { class: 'lb-btn lb-next', type: 'button', 'aria-label': 'Foto siguiente', onclick: function () { go(1); }, text: '›' }));
+    show();
+    lb = { node: box, go: go, prev: document.activeElement };
+    document.body.append(box);
+    box.querySelector('.lb-x').focus();
+  }
+  function closeLightbox() { if (!lb) return; lb.node.remove(); var p = lb.prev; lb = null; try { if (p && p.focus) p.focus(); } catch (e) {} }
+  document.addEventListener('keydown', function (ev) {
+    if (lb) {
+      if (ev.key === 'Escape') { ev.preventDefault(); closeLightbox(); }
+      else if (ev.key === 'ArrowLeft') lb.go(-1);
+      else if (ev.key === 'ArrowRight') lb.go(1);
+      return;
+    }
+    if (ev.key === 'Escape' && modal) closeModal();
+  });
 
   function renderOverlay() {
     var host = $('#overlay');
@@ -536,6 +795,10 @@
         Object.assign(draft[key], vals); delete draft[key].ejemplo;
         markDirty(); closeModal(); render();
       });
+    } else if (modal.type === 'newpass') {
+      title = 'Nueva contraseña'; body = formNewPass();
+    } else if (modal.type === 'login') {
+      title = 'Ingreso docentes'; body = formLogin();
     } else {
       title = 'Datos de la escuela'; body = formEsc(d);
     }
@@ -551,14 +814,19 @@
     (first || scrim.querySelector('.dlg')).focus();
   }
 
+  function zoomImg(list, i, alt) {
+    return el('button', { class: 'zoom', type: 'button', 'aria-label': 'Ampliar: ' + alt, onclick: function () { openLightbox(list, i); } },
+      el('img', { src: list[i], alt: alt }));
+  }
   function verBody(p) {
     var fotos = p.fotos || [];
     var u = safeUrl(p.enlace);
     return el('div', null,
       el('p', { class: 'kick', text: [p.curso, p.nivel, p.periodo].filter(Boolean).join(' · ') }),
       p.docente ? el('p', { class: 'hint', text: 'A cargo: ' + p.docente }) : null,
-      fotos.length ? el('div', { class: 'gal' }, el('img', { src: fotos[0], alt: 'Foto principal del proyecto ' + p.titulo })) : null,
-      fotos.length > 1 ? el('div', { class: 'gal rest' }, fotos.slice(1).map(function (f, i) { return el('img', { src: f, alt: 'Foto ' + (i + 2) + ' del proyecto ' + p.titulo }); })) : null,
+      fotos.length ? el('div', { class: 'gal' }, zoomImg(fotos, 0, 'Foto principal del proyecto ' + p.titulo)) : null,
+      fotos.length > 1 ? el('div', { class: 'gal rest' }, fotos.slice(1).map(function (f, i) { return zoomImg(fotos, i + 1, 'Foto ' + (i + 2) + ' del proyecto ' + p.titulo); })) : null,
+      fotos.length ? el('p', { class: 'hint', text: 'Tocá una foto para verla más grande.' }) : null,
       p.resumen ? el('p', { class: 'body', text: p.resumen }) : null,
       p.texto ? el('p', { class: 'body', text: p.texto }) : null,
       u ? el('div', { class: 'acts' }, el('a', { class: 'btn sm', href: u, target: '_blank', rel: 'noopener noreferrer', text: 'Abrir enlace' })) : null);
@@ -666,7 +934,7 @@
         el('span', { class: 'lbl', text: 'Fotos (hasta 4)' }),
         box,
         fileIn,
-        el('p', { class: 'hint', text: 'La primera foto es la portada. Se reducen automáticamente para que la página cargue rápido.' })),
+        el('p', { class: 'hint', text: 'La primera foto es la portada. Se reducen automáticamente (hasta 1600 px) para que la página cargue rápido.' })),
       field('f-enlace', 'Enlace (opcional)', el('input', { class: 'in', id: 'f-enlace', type: 'text', inputmode: 'url', placeholder: 'https://', value: v.enlace })),
       foot(p ? 'Aplicar cambios' : 'Agregar proyecto'));
     form.addEventListener('submit', function (ev) {
@@ -695,17 +963,17 @@
         el('button', { class: 'btn sm danger', type: 'button', onclick: function () { formFotos.splice(i, 1); drawFotos(); }, text: 'Quitar' })));
     });
   }
-  function shrink(file) {
+  function shrink(file, maxPx, q) {
     return new Promise(function (res, rej) {
       var fr = new FileReader();
       fr.onload = function () {
         var img = new Image();
         img.onload = function () {
-          var max = 900, s = Math.min(1, max / Math.max(img.width, img.height));
+          var max = maxPx || 800, s = Math.min(1, max / Math.max(img.width, img.height));
           var w = Math.max(1, Math.round(img.width * s)), h = Math.max(1, Math.round(img.height * s));
           var cv = document.createElement('canvas'); cv.width = w; cv.height = h;
           var ctx = cv.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, w, h); ctx.drawImage(img, 0, 0, w, h);
-          res(cv.toDataURL('image/jpeg', 0.7));
+          res(cv.toDataURL('image/jpeg', q || 0.65));
         };
         img.onerror = function () { rej(new Error('img')); };
         img.src = fr.result;
@@ -720,7 +988,7 @@
     list.forEach(function (f) {
       chain = chain.then(function () {
         if (formFotos.length >= 4 || !/^image\//.test(f.type)) return;
-        return shrink(f).then(function (u) { formFotos.push(u); }, function () { failed = true; });
+        return shrink(f, 1600, 0.72).then(function (u) { formFotos.push(u); }, function () { failed = true; });
       });
     });
     chain.then(function () {
@@ -731,8 +999,25 @@
 
   function formEsc(d) {
     var e = d.escuela;
+    var portada = e.portada || '';
+    var pv = el('div', { class: 'cover-prev', id: 'portada-prev' });
+    function drawPortada() {
+      pv.replaceChildren();
+      if (portada) {
+        pv.append(el('img', { src: portada, alt: 'Imagen de cabecera' }),
+          el('button', { class: 'btn sm danger', type: 'button', onclick: function () { portada = ''; drawPortada(); }, text: 'Quitar imagen' }));
+      } else pv.append(el('p', { class: 'hint', text: 'Sin imagen: se muestra el fondo de cuadritos.' }));
+    }
+    drawPortada();
+    var pIn = el('input', { id: 'f-portada', type: 'file', accept: 'image/*', onchange: function (ev) {
+      var f = ev.target.files && ev.target.files[0]; ev.target.value = '';
+      if (!f || !/^image\//.test(f.type)) return;
+      shrink(f, 1920, 0.72).then(function (u) { portada = u; drawPortada(); }, function () { showErr('No se pudo leer la imagen. Probá con un archivo JPG o PNG.'); });
+    } });
     var form = el('form', { novalidate: true },
       errBox(),
+      el('div', { class: 'field' }, el('span', { class: 'lbl', text: 'Imagen de cabecera (opcional)' }), pv, pIn,
+        el('p', { class: 'hint', text: 'Aparece detrás del nombre de la escuela. Tamaño recomendado: 1920 × 600 px (horizontal).' })),
       field('f-nombre', 'Nombre de la escuela', el('input', { class: 'in', id: 'f-nombre', type: 'text', maxlength: '100', value: e.nombre })),
       field('f-lema', 'Frase o lema (opcional)', el('input', { class: 'in', id: 'f-lema', type: 'text', maxlength: '120', value: e.lema })),
       el('div', { class: 'row2' },
@@ -750,7 +1035,7 @@
       if (!nombre) { showErr('Escribí el nombre de la escuela.'); return; }
       var grupos = document.getElementById('f-grupos').value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
       if (!grupos.length) grupos = ['Toda la escuela'];
-      draft.escuela = { nombre: nombre, lema: val('f-lema'), direccion: val('f-dir'), telefono: val('f-tel'), email: val('f-mail'), horario: val('f-hor'), grupos: grupos };
+      draft.escuela = { nombre: nombre, lema: val('f-lema'), direccion: val('f-dir'), telefono: val('f-tel'), email: val('f-mail'), horario: val('f-hor'), grupos: grupos, portada: portada };
       draft.comunicados.forEach(function (c) { if (grupos.indexOf(c.para) < 0) c.para = grupos[0]; });
       draft.proyectos.forEach(function (p) { var n = niveles(draft); if (n.indexOf(p.nivel) < 0) p.nivel = n[0]; });
       markDirty(); closeModal(); render();
@@ -759,16 +1044,6 @@
   }
 
   /* ---------- arranque ---------- */
-  render();
-  (function init() {
-    if (!window.claude || !window.claude.use) return;
-    window.claude.use('user').then(function (u) { return u ? u.canEdit() : false; }).then(function (ok) {
-      canEdit = !!ok;
-      if (!canEdit) return;
-      var stash = null;
-      try { var raw = sessionStorage.getItem('pf-draft'); if (raw) { stash = norm(JSON.parse(raw)); sessionStorage.removeItem('pf-draft'); } } catch (e) {}
-      if (stash) { draft = stash; editing = true; dirty = true; msg = 'Se recuperaron tus cambios. Revisalos y volvé a publicar.'; }
-      render();
-    }).catch(function () {});
-  })();
+  initSupabase();
+  if (!loading) render();
 })();
