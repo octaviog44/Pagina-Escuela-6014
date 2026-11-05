@@ -240,15 +240,24 @@ textarea.in { min-height: 5rem; resize: vertical; }
 .who { font: 500 .8rem var(--f-mono); color: var(--ink-2); overflow-wrap: anywhere; }
 .loading { padding-block: 64px; text-align: center; }
 
-/* Imagen de cabecera */
-.hero.has-img { background-size: cover; background-position: center; color: #fff; }
-.hero.has-img .eyebrow, .hero.has-img .lema, .hero.has-img .who { color: #fff; }
-.hero.has-img h1 { color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,.35); }
-.hero.has-img h1 span { background: none; padding: 0; margin: 0; }
-.hero.has-img .wrap { padding-block: 26px 0; }
-.hero.has-img .tabs { background: rgba(255,255,255,.94); border-radius: 8px 8px 0 0; padding-inline: 6px; }
-.hero.has-img .hero-top { min-height: 24px; }
-.hero.has-img h1 { margin-top: clamp(40px, 9vw, 110px); }
+/* Imagen de cabecera: en pantallas grandes va de fondo (la altura sigue la forma de la foto); en celular se muestra entera arriba. */
+.hero-pic { display: none; }
+@media (max-width: 700px) {
+  .hero.has-img .hero-pic { display: block; width: 100%; height: auto; max-height: 60vh; object-fit: cover; }
+}
+@media (min-width: 701px) {
+  .hero.has-img {
+    background-image: linear-gradient(rgba(14,24,48,.5), rgba(14,24,48,.7)), var(--pic);
+    background-size: cover; background-position: center; color: #fff;
+    aspect-ratio: var(--ar, auto); max-height: 460px; display: flex; flex-direction: column;
+  }
+  .hero.has-img .wrap { flex: 1; display: flex; flex-direction: column; padding-block: 26px 0; }
+  .hero.has-img .hero-top { margin-bottom: 40px; }
+  .hero.has-img .eyebrow, .hero.has-img .lema, .hero.has-img .who { color: #fff; }
+  .hero.has-img h1 { color: #fff; text-shadow: 0 2px 12px rgba(0,0,0,.35); margin-top: auto; }
+  .hero.has-img h1 span { background: none; padding: 0; margin: 0; }
+  .hero.has-img .tabs { background: rgba(255,255,255,.94); border-radius: 8px 8px 0 0; padding-inline: 6px; }
+}
 .cover-prev { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; margin-bottom: 8px; }
 .cover-prev img { width: 100%; max-height: 180px; object-fit: cover; border-radius: var(--r); display: block; }
 .steps { padding-left: 1.4rem; }

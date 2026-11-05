@@ -111,6 +111,7 @@
     s.inicio = s.inicio || { titulo: '', texto: '' };
     s.nosotros = s.nosotros || { historia: '', mision: '' };
     s.escuela.portada = s.escuela.portada || '';
+    s.escuela.portadaAr = Number(s.escuela.portadaAr) > 0 ? Number(s.escuela.portadaAr) : 0;
     s.libreta = s.libreta || { texto: '', pasos: '', enlace: '', boton: '', ayuda: '' };
     s.inscripcion = s.inscripcion || { texto: '', requisitos: '', fechas: '', enlace: '' };
     ['equipo', 'niveles', 'calendario', 'contactos', 'comunicados', 'proyectos'].forEach(function (k) { s[k] = s[k] || []; });
@@ -297,7 +298,10 @@
   function hero(d) {
     var e = d.escuela;
     var pu = e.portada && (/^data:image\//.test(e.portada) || safeUrl(e.portada)) ? e.portada : '';
-    return el('header', { class: 'hero' + (pu ? ' has-img' : ''), style: pu ? 'background-image:linear-gradient(rgba(14,24,48,.55),rgba(14,24,48,.72)),url("' + pu.replace(/["\\\n]/g, '') + '")' : null }, el('div', { class: 'wrap' },
+    var pst = pu ? '--pic:url("' + pu.replace(/["\\\n]/g, '') + '")' + (e.portadaAr ? ';--ar:' + e.portadaAr : '') : null;
+    return el('header', { class: 'hero' + (pu ? ' has-img' : ''), style: pst },
+      pu ? el('img', { class: 'hero-pic', src: pu, alt: '' }) : null,
+      el('div', { class: 'wrap' },
       el('div', { class: 'hero-top' },
         el('p', { class: 'eyebrow', text: 'Sitio de la escuela' }),
         sbProblem && /[?&]diagnostico/.test(location.search) ? el('p', { class: 'who', style: 'color:#b3261e', text: sbProblem }) : null,
@@ -999,25 +1003,28 @@
 
   function formEsc(d) {
     var e = d.escuela;
-    var portada = e.portada || '';
+    var portada = e.portada || '', portadaAr = e.portadaAr || 0;
     var pv = el('div', { class: 'cover-prev', id: 'portada-prev' });
     function drawPortada() {
       pv.replaceChildren();
       if (portada) {
         pv.append(el('img', { src: portada, alt: 'Imagen de cabecera' }),
-          el('button', { class: 'btn sm danger', type: 'button', onclick: function () { portada = ''; drawPortada(); }, text: 'Quitar imagen' }));
+          el('button', { class: 'btn sm danger', type: 'button', onclick: function () { portada = ''; portadaAr = 0; drawPortada(); }, text: 'Quitar imagen' }));
       } else pv.append(el('p', { class: 'hint', text: 'Sin imagen: se muestra el fondo de cuadritos.' }));
     }
     drawPortada();
     var pIn = el('input', { id: 'f-portada', type: 'file', accept: 'image/*', onchange: function (ev) {
       var f = ev.target.files && ev.target.files[0]; ev.target.value = '';
       if (!f || !/^image\//.test(f.type)) return;
-      shrink(f, 1920, 0.72).then(function (u) { portada = u; drawPortada(); }, function () { showErr('No se pudo leer la imagen. Probá con un archivo JPG o PNG.'); });
+      shrink(f, 1920, 0.72).then(function (u) {
+        portada = u; portadaAr = 0; drawPortada();
+        var t = new Image(); t.onload = function () { if (t.height) portadaAr = Math.round(t.width / t.height * 1000) / 1000; }; t.src = u;
+      }, function () { showErr('No se pudo leer la imagen. Probá con un archivo JPG o PNG.'); });
     } });
     var form = el('form', { novalidate: true },
       errBox(),
       el('div', { class: 'field' }, el('span', { class: 'lbl', text: 'Imagen de cabecera (opcional)' }), pv, pIn,
-        el('p', { class: 'hint', text: 'Aparece detrás del nombre de la escuela. Tamaño recomendado: 1920 × 600 px (horizontal).' })),
+        el('p', { class: 'hint', text: 'Aparece detrás del nombre de la escuela. Cualquier foto horizontal sirve; ideal 1920 × 600 px.' })),
       field('f-nombre', 'Nombre de la escuela', el('input', { class: 'in', id: 'f-nombre', type: 'text', maxlength: '100', value: e.nombre })),
       field('f-lema', 'Frase o lema (opcional)', el('input', { class: 'in', id: 'f-lema', type: 'text', maxlength: '120', value: e.lema })),
       el('div', { class: 'row2' },
@@ -1035,7 +1042,7 @@
       if (!nombre) { showErr('Escribí el nombre de la escuela.'); return; }
       var grupos = document.getElementById('f-grupos').value.split('\n').map(function (s) { return s.trim(); }).filter(Boolean);
       if (!grupos.length) grupos = ['Toda la escuela'];
-      draft.escuela = { nombre: nombre, lema: val('f-lema'), direccion: val('f-dir'), telefono: val('f-tel'), email: val('f-mail'), horario: val('f-hor'), grupos: grupos, portada: portada };
+      draft.escuela = { nombre: nombre, lema: val('f-lema'), direccion: val('f-dir'), telefono: val('f-tel'), email: val('f-mail'), horario: val('f-hor'), grupos: grupos, portada: portada, portadaAr: portada ? portadaAr : 0 };
       draft.comunicados.forEach(function (c) { if (grupos.indexOf(c.para) < 0) c.para = grupos[0]; });
       draft.proyectos.forEach(function (p) { var n = niveles(draft); if (n.indexOf(p.nivel) < 0) p.nivel = n[0]; });
       markDirty(); closeModal(); render();
